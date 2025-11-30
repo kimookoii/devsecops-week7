@@ -1,20 +1,28 @@
 name: Trivy Scan
 on:
- push:
- branches: [ main ]
-jobs:
- scan:
- runs-on: ubuntu-latest
- steps:
- - name: Checkout Code
- uses: actions/checkout@v3
+  push:
+    branches: [ main ]
 
- - name: Install Trivy
- run: |
- sudo apt-get install wget -y
- wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_Linux-64bit.deb
- sudo dpkg -i trivy_Linux-64bit.deb
- - name: Build Docker Image
- run: docker build -t devsecops-scan .
- - name: Run Trivy Scan
- run: trivy image --exit-code 1 --severity HIGH,CRITICAL devsecops-scan
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wget apt-transport-https ca-certificates
+
+      - name: Install Trivy
+        run: |
+          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_Linux-64bit.deb
+          sudo dpkg -i trivy_Linux-64bit.deb
+
+      - name: Build Docker image
+        run: docker build -t devsecops-scan .
+
+      - name: Run Trivy image scan (fail on HIGH/CRITICAL)
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL devsecops-scan
