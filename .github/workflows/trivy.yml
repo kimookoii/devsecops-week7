@@ -1,23 +1,69 @@
-name: Trivy Scan
+name: Trivy Image Scan
+
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  scan:
+  trivy-scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t devsecops-scan .
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
 
-      - name: Run Trivy (action)
-        uses: aquasecurity/trivy-action@v0.9.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image
+        run: |
+          set -euo pipefail
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          docker build -t ghcr.io/$REPO_OWNER/$REPO_NAME:scan-latest .
+
+      - name: Install Trivy via APT repo
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gnupg wget apt-transport-https lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+          trivy --version
+
+      - name: Run Trivy Scan (fail on HIGH/CRITICAL) and save output
+        run: |
+          set -euo pipefail
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+
+          # Run trivy and capture its exit code while saving output to file
+          # trivy exit codes: 0 = no vulnerabilities found (or below severity filter)
+          #                     1 = vulnerabilities found (for severity filter) -> we want to fail pipeline
+          trivy image --exit-code 1 --severity HIGH,CRITICAL --format table ghcr.io/$REPO_OWNER/$REPO_NAME:scan-latest | tee trivy-output.txt
+          rc=${PIPESTATUS[0]:-0}
+          if [ "$rc" -eq 1 ]; then
+            echo "Trivy found HIGH/CRITICAL vulnerabilities (exit code $rc). See trivy-output.txt"
+            exit 1
+          elif [ "$rc" -ne 0 ]; then
+            echo "Trivy returned unexpected exit code $rc"
+            exit $rc
+          else
+            echo "No HIGH/CRITICAL vulnerabilities found."
+          fi
+
+      - name: Upload Trivy Output
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          image-ref: devsecops-scan
-          format: table
-          severity: HIGH,CRITICAL
-          exit-code: 1
+          name: trivy-output
+          path: trivy-output.txt
